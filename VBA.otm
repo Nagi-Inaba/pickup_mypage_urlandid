@@ -1,0 +1,543 @@
+Option Explicit
+
+' 選択中のメールからマイページURL・ログインID・パスワードを抽出し、
+' 新しいExcelブックに一覧出力＋該当メールを専用フォルダにコピーするマクロ
+Public Sub ExtractMyPageFromSelectedMails()
+
+    Const TARGET_FOLDER_NAME As String = "就活マイページ抽出"
+    
+    Dim xlApp As Object
+    Dim xlWb As Object
+    Dim xlSh As Object
+    Dim nextRow As Long
+    
+    Dim sel As Selection
+    Dim itm As Object
+    Dim mail As MailItem
+    
+    Dim bodyText As String
+    Dim mypageUrl As String
+    Dim loginId As String
+    Dim passwordText As String
+    
+    Dim seenIds As Object          ' 重複ID防止（1回の実行内）
+    Dim ns As Outlook.NameSpace
+Dim inbox As Outlook.Folder
+Dim destFolder As Outlook.Folder
+Dim copiedMail As MailItem
+Dim firstMail As MailItem
+Dim currStore As Outlook.Store
+
+' 重複ID管理用ディクショナリ
+Set seenIds = CreateObject("Scripting.Dictionary")
+
+' 選択メールチェック
+Set sel = Application.ActiveExplorer.Selection
+If sel Is Nothing Or sel.Count = 0 Then
+    MsgBox "メールが選択されていません。", vbExclamation
+    Exit Sub
+End If
+
+' 選択されている中で最初の MailItem を取得
+For Each itm In sel
+    If TypeOf itm Is MailItem Then
+        Set firstMail = itm
+        Exit For
+    End If
+Next
+
+If firstMail Is Nothing Then
+    MsgBox "メールアイテムが選択されていません。", vbExclamation
+    Exit Sub
+End If
+
+' このメールが属しているアカウントのストアから受信トレイを取得
+Set currStore = firstMail.Parent.Store
+Set inbox = currStore.GetDefaultFolder(olFolderInbox)
+
+' コピー先フォルダ準備（このアカウントの受信トレイ直下に作る）
+On Error Resume Next
+Set destFolder = inbox.Folders(TARGET_FOLDER_NAME)
+On Error GoTo 0
+
+If destFolder Is Nothing Then
+    Set destFolder = inbox.Folders.Add(TARGET_FOLDER_NAME)
+End If
+
+    
+    ' Excel起動
+    Set xlApp = CreateObject("Excel.Application")
+    xlApp.Visible = True
+    Set xlWb = xlApp.Workbooks.Add
+    Set xlSh = xlWb.Sheets(1)
+    
+    ' ヘッダー行
+    xlSh.Cells(1, 1).Value = "受信日時"
+    xlSh.Cells(1, 2).Value = "差出人（会社名）"
+    xlSh.Cells(1, 3).Value = "件名"
+    xlSh.Cells(1, 4).Value = "マイページURL"
+    xlSh.Cells(1, 5).Value = "ログインID"
+    xlSh.Cells(1, 6).Value = "パスワード"
+    
+    nextRow = 2
+    
+    ' 選択メールを1通ずつ処理
+    For Each itm In sel
+        If TypeOf itm Is MailItem Then
+            Set mail = itm
+            
+            ' 本文取得（プレーンテキスト優先）
+            bodyText = mail.Body
+            If bodyText = "" Then
+                bodyText = mail.HTMLBody
+            End If
+            
+            mypageUrl = ExtractMyPageUrl(bodyText)
+            loginId = ExtractLoginId(bodyText)
+            passwordText = ExtractPassword(bodyText)
+            
+            ' URLとIDの両方があるものだけ記録（お知らせメールなどは除外）
+            If mypageUrl <> "" And loginId <> "" Then
+                
+                ' 同じIDは1回の実行内で一度だけ
+                If Not seenIds.Exists(loginId) Then
+                    seenIds.Add loginId, True
+                    
+                    xlSh.Cells(nextRow, 1).Value = mail.ReceivedTime
+                    xlSh.Cells(nextRow, 2).Value = CleanSenderName(mail.SenderName)
+                    xlSh.Cells(nextRow, 3).Value = mail.Subject
+                    xlSh.Cells(nextRow, 4).Value = mypageUrl
+                    xlSh.Cells(nextRow, 5).Value = loginId
+                    xlSh.Cells(nextRow, 6).Value = passwordText
+                    nextRow = nextRow + 1
+                    
+                    ' 抽出対象メールを専用フォルダへコピー
+                    If Not destFolder Is Nothing Then
+                        Set copiedMail = mail.Copy
+                        copiedMail.Move destFolder
+                    End If
+                End If
+            End If
+        End If
+    Next itm
+    
+    MsgBox "抽出とメールコピーが完了しました。", vbInformation
+
+End Sub
+
+' 差出人（SenderName）から会社名だけを残すクリーニング
+' 指定ワード・空白・記号（＆/＆を除く）を削除する
+Private Function CleanSenderName(ByVal s As String) As String
+    Dim words As Variant
+    Dim i As Long
+    Dim ch As String
+    Dim result As String
+    Dim removeChars As String
+    
+    ' 削除するワード
+    words = Array( _
+        "株式会社", _
+        "採用担当", _
+        "合同セミナー", _
+        "マイページ", _
+        "キャリアスクエア", _
+        "アドレス", _
+        "採用課", _
+        "新卒", _
+        "採用", _
+        "人事部", _
+        "事務系", _
+        "人事本部", _
+        "人事課", _
+        "インターンシップ", _
+        "担当", _
+        "事務局", _
+        "人材開発部", _
+        "チーム", _
+        "キャリア", _
+        "送信専用", _
+        "本部", _
+        "運営", _
+        "教育" _
+    )
+    
+    ' ワード削除
+    For i = LBound(words) To UBound(words)
+        s = Replace(s, words(i), "")
+    Next i
+    
+    ' 半角・全角スペース削除
+    s = Replace(s, " ", "")
+    s = Replace(s, "　", "")
+    
+    ' 削除したい記号（＆と＆は除外）
+    ' 必要に応じてここに記号を足していけばOK
+    removeChars = "/／・。、「」『』（）()【】[]＜＞〈〉《》…‥!！?？：:；;＋+＊*＝=｜|＠@＃#$％%＾^~｀`" & Chr(34)
+    
+    ' 1文字ずつ走査して、記号だけ落とす
+    For i = 1 To Len(s)
+        ch = Mid$(s, i, 1)
+        
+        ' & / ＆ は残す
+        If ch = "&" Or ch = "＆" Then
+            result = result & ch
+        ' 上で定義した記号は削除
+        ElseIf InStr(removeChars, ch) > 0 Then
+            ' 何もしない（削除）
+        Else
+            ' それ以外は全部残す（漢字・ひらがな・カタカナ・英数字すべて）
+            result = result & ch
+        End If
+    Next i
+    
+    CleanSenderName = result
+End Function
+
+
+' 本文からマイページURL候補を抽出
+Private Function ExtractMyPageUrl(ByVal text As String) As String
+    Dim reg As New RegExp
+    Dim matches As MatchCollection
+    Dim m As Match
+    Dim url As String
+    
+    Dim bestUrl As String
+    Dim bestScore As Long
+    Dim score As Long
+    
+    reg.Pattern = "(https?://[^\s""'>]+)"
+    reg.Global = True
+    reg.IgnoreCase = True
+    
+    If Not reg.Test(text) Then
+        ExtractMyPageUrl = ""
+        Exit Function
+    End If
+    
+    Set matches = reg.Execute(text)
+    bestScore = -999
+    
+    Dim hintWords() As String
+    hintWords = Split("マイページ,マイページURL,ログイン,ログインURL,My Page,Mypage,mypage,entry", ",")
+    
+    Dim lower As String
+    Dim host As String
+    Dim pos As Long
+    Dim idx As Long
+    Dim startPos As Long, endPos As Long
+    Dim windowText As String
+    Dim i As Long
+    
+    For Each m In matches
+        url = m.Value
+        score = 0
+        
+        lower = LCase$(url)
+        
+        ' Zoom系URLは完全に除外
+        If InStr(lower, "zoom.us") > 0 Or InStr(lower, "zoom.com") > 0 Then
+            GoTo NextUrl
+        End If
+        
+        ' ホスト部分
+        host = lower
+        pos = InStr(9, lower, "/") ' "https://"は8文字なので9文字目から検索
+        If pos > 0 Then
+            host = Left$(lower, pos - 1)
+        End If
+        
+        ' 就活マイページでよく使われるドメインを優遇
+        If InStr(host, "job.axol.jp") > 0 Then
+            score = score + 10
+        End If
+        If InStr(host, "e2r.jp") > 0 Then
+            score = score + 8
+        End If
+        If InStr(host, "i-web") > 0 Or InStr(host, "i-webs") > 0 Then
+            score = score + 8
+        End If
+        If InStr(host, "talent-p.net") > 0 Then
+            score = score + 5
+        End If
+        If InStr(host, "snar.jp") > 0 Then
+            score = score + 5
+        End If
+        
+        ' URL自体にそれっぽい文字があれば加点
+        If InStr(lower, "mypage") > 0 Then score = score + 3
+        If InStr(lower, "entry") > 0 Then score = score + 2
+        If InStr(lower, "login") > 0 Then score = score + 2
+        If InStr(lower, "recruit") > 0 Or InStr(lower, "saiyo") > 0 Then score = score + 1
+        
+        ' URL前後の文脈
+        idx = InStr(text, url)
+        If idx > 0 Then
+            startPos = IIf(idx - 50 > 1, idx - 50, 1)
+            endPos = IIf(idx + Len(url) + 50 < Len(text), idx + Len(url) + 50, Len(text))
+            windowText = Mid$(text, startPos, endPos - startPos + 1)
+            
+            For i = LBound(hintWords) To UBound(hintWords)
+                If InStr(windowText, hintWords(i)) > 0 Then
+                    score = score + 5
+                End If
+            Next i
+        End If
+        
+        If score > bestScore Then
+            bestScore = score
+            bestUrl = url
+        End If
+        
+NextUrl:
+    Next m
+    
+    ExtractMyPageUrl = bestUrl
+End Function
+
+' ID/PWトークンからカッコ・記号を削る
+Private Function CleanToken(ByVal s As String) As String
+    s = Trim$(s)
+    
+    ' 先頭のカッコや記号
+    Do While Len(s) > 0 And _
+          (Left$(s, 1) = "(" Or Left$(s, 1) = "（" Or _
+           Left$(s, 1) = "・" Or Left$(s, 1) = "●" Or _
+           Left$(s, 1) = "■" Or Left$(s, 1) = "□")
+        s = Mid$(s, 2)
+        s = LTrim$(s)
+    Loop
+    
+    ' 末尾のカッコや句点
+    Do While Len(s) > 0 And _
+          (Right$(s, 1) = ")" Or Right$(s, 1) = "）" Or _
+           Right$(s, 1) = "。" Or Right$(s, 1) = "．")
+        s = Left$(s, Len(s) - 1)
+        s = RTrim$(s)
+    Loop
+    
+    CleanToken = s
+End Function
+
+' 「英数字＋@_.-だけ」「長さ50文字以内」
+' かつ「英数字が1文字以上含まれている」ならID候補としてOKとみなす
+Private Function IsIdLike(ByVal s As String) As Boolean
+    Dim re As Object
+    
+    s = Trim$(s)
+    If Len(s) = 0 Or Len(s) > 50 Then
+        IsIdLike = False
+        Exit Function
+    End If
+    
+    Set re = CreateObject("VBScript.RegExp")
+    ' 許可文字チェック
+    re.Pattern = "^[0-9A-Za-z_\-@\.]+$"
+    re.IgnoreCase = False
+    re.Global = False
+    
+    If Not re.Test(s) Then
+        IsIdLike = False
+        Exit Function
+    End If
+    
+    ' 英数字が1文字以上含まれているか
+    re.Pattern = "[0-9A-Za-z]"
+    If Not re.Test(s) Then
+        IsIdLike = False
+        Exit Function
+    End If
+    
+    IsIdLike = True
+End Function
+
+' 本文からログインID候補を抽出
+Private Function ExtractLoginId(ByVal text As String) As String
+    Dim reg As New RegExp
+    Dim m As Match
+    Dim matches As MatchCollection
+    Dim patterns() As String
+    Dim i As Long
+    Dim candidate As String
+    
+    ' 1) ラベル付きパターン
+    patterns = Split("ログインID,個人ID,個人ＩＤ,会員ID,ユーザーID,ＩＤ番号,ID番号", ",")
+    
+    reg.Global = False
+    reg.IgnoreCase = False
+    
+    For i = LBound(patterns) To UBound(patterns)
+        reg.Pattern = patterns(i) & "[\s　]*[：:][\s　]*([0-9A-Za-z_\-@\.]+)"
+        If reg.Test(text) Then
+            Set m = reg.Execute(text)(0)
+            If m.SubMatches.Count > 0 Then
+                candidate = CleanToken(m.SubMatches(0))
+                If IsIdLike(candidate) Then
+                    ExtractLoginId = candidate
+                    Exit Function
+                End If
+            End If
+        End If
+    Next i
+    
+    ' 2) 汎用「ID/ＩＤ」＋コロン（文脈でフィルタ）
+    reg.Global = True
+    reg.IgnoreCase = False
+    reg.Pattern = "(ID|ＩＤ)[\s　]*[：:][\s　]*([0-9A-Za-z_\-@\.]+)"
+    
+    If reg.Test(text) Then
+        Set matches = reg.Execute(text)
+        
+        Dim idx As Long
+        Dim startPos As Long, endPos As Long
+        Dim windowText As String
+        Dim positive As Boolean, negative As Boolean
+        
+        For Each m In matches
+            If m.SubMatches.Count >= 2 Then
+                candidate = CleanToken(m.SubMatches(1))
+            ElseIf m.SubMatches.Count = 1 Then
+                candidate = CleanToken(m.SubMatches(0))
+            Else
+                candidate = ""
+            End If
+            
+            If Not IsIdLike(candidate) Then GoTo NextMatch
+            
+            idx = m.FirstIndex + 1
+            startPos = IIf(idx - 60 > 1, idx - 60, 1)
+            endPos = IIf(idx + Len(m.Value) + 60 < Len(text), idx + Len(m.Value) + 60, Len(text))
+            windowText = Mid$(text, startPos, endPos - startPos + 1)
+            
+            positive = False
+            negative = False
+            
+            ' マイページ系ワード
+            If InStr(windowText, "マイページ") > 0 _
+               Or InStr(windowText, "Mypage") > 0 _
+               Or InStr(windowText, "MyPage") > 0 _
+               Or InStr(windowText, "My Page") > 0 _
+               Or InStr(windowText, "mypage") > 0 _
+               Or InStr(windowText, "ログイン") > 0 Then
+                positive = True
+            End If
+            
+            ' Zoom / ミーティング系ワード
+            If InStr(1, windowText, "zoom", vbTextCompare) > 0 _
+               Or InStr(windowText, "ミーティング") > 0 _
+               Or InStr(1, windowText, "meeting", vbTextCompare) > 0 _
+               Or InStr(windowText, "ルームID") > 0 Then
+                negative = True
+            End If
+            
+            If positive And Not negative Then
+                ExtractLoginId = candidate
+                Exit Function
+            End If
+            
+NextMatch:
+        Next m
+    End If
+    
+    ' 3) 行ベース：「アカウント」「さんのID」系 → 次の行
+    Dim lines() As String
+    Dim line As String
+    Dim j As Long
+    
+    text = Replace(text, vbCrLf, vbLf)
+    text = Replace(text, vbCr, vbLf)
+    lines = Split(text, vbLf)
+    
+    For i = LBound(lines) To UBound(lines)
+        line = Trim$(lines(i))
+        If line = "" Then GoTo nextLine
+        
+        If InStr(line, "アカウント") > 0 _
+           Or InStr(line, "アカウント】") > 0 _
+           Or InStr(line, "アカウントの情報") > 0 _
+           Or InStr(line, "さんのID") > 0 _
+           Or InStr(line, "さんのＩＤ") > 0 _
+           Or InStr(line, "ID ]") > 0 _
+           Or InStr(line, "ID]") > 0 Then
+           
+           For j = i + 1 To UBound(lines)
+               candidate = CleanToken(Trim$(lines(j)))
+               If candidate <> "" Then
+                   If IsIdLike(candidate) Then
+                       ExtractLoginId = candidate
+                       Exit Function
+                   End If
+               End If
+           Next j
+        End If
+        
+nextLine:
+    Next i
+    
+    ExtractLoginId = ""
+End Function
+
+' 本文からパスワード候補を抽出
+Private Function ExtractPassword(ByVal text As String) As String
+    Dim lines() As String
+    Dim i As Long
+    Dim line As String
+    Dim nextLine As String
+    Dim pos As Long
+    Dim candidate As String
+    Dim lower As String
+    
+    text = Replace(text, vbCrLf, vbLf)
+    text = Replace(text, vbCr, vbLf)
+    lines = Split(text, vbLf)
+    
+    For i = LBound(lines) To UBound(lines)
+        line = Trim$(lines(i))
+        If line = "" Then GoTo NextLinePw
+        
+        Dim hasLabel As Boolean
+        hasLabel = False
+        
+        If InStr(line, "初期パスワード") > 0 _
+           Or InStr(line, "仮パスワード") > 0 _
+           Or InStr(line, "ログインパスワード") > 0 _
+           Or InStr(line, "ログインPW") > 0 _
+           Or InStr(line, "パスワード") > 0 _
+           Or InStr(line, "PW") > 0 _
+           Or InStr(line, "ＰＷ") > 0 Then
+            hasLabel = True
+        End If
+        
+        If hasLabel Then
+            pos = InStr(line, "：")
+            If pos = 0 Then pos = InStr(line, ":")
+            
+            If pos > 0 And pos < Len(line) Then
+                candidate = CleanToken(Mid$(line, pos + 1))
+                lower = LCase$(candidate)
+                If candidate <> "" And Left$(lower, 4) <> "http" Then
+                    ExtractPassword = candidate
+                    Exit Function
+                End If
+            Else
+                If InStr(line, "初期パスワード") > 0 _
+                   Or InStr(line, "仮パスワード") > 0 Then
+                   
+                    If i < UBound(lines) Then
+                        nextLine = CleanToken(Trim$(lines(i + 1)))
+                        lower = LCase$(nextLine)
+                        If nextLine <> "" And Left$(lower, 4) <> "http" Then
+                            ExtractPassword = nextLine
+                            Exit Function
+                        End If
+                    End If
+                End If
+            End If
+        End If
+        
+NextLinePw:
+    Next i
+    
+    ExtractPassword = ""
+End Function
+
+
