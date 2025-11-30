@@ -6,13 +6,10 @@ Public Sub ExtractMyPageFromSelectedMails()
 
     Const TARGET_FOLDER_NAME As String = "就活マイページ抽出"
 
-    ' ▼ここに追記先スプレッドシートのパス（またはURL）とシート名を設定してください▼
-    ' 例: "C:\Users\you\Google Drive\マイページ\mypage_list.xlsx" または
-    '     "https://example.sharepoint.com/:x:/r/sites/your/Shared%20Documents/mypage_list.xlsx"
-    Const DEST_BOOK_LOCATION As String = "https://example.sharepoint.com/:x:/r/sites/your/Shared%20Documents/mypage_sheet.xlsx"
-    Const DEST_SHEET_NAME As String = "マイページ一覧"
     ' 固定の列対応: A=企業名, D=URL, E=ID, F=パスワード
     Const COL_COMPANY As Long = 1
+    Const COL_RECEIVED As Long = 2
+    Const COL_SUBJECT As Long = 3
     Const COL_URL As Long = 4
     Const COL_ID As Long = 5
     Const COL_PASSWORD As Long = 6
@@ -21,7 +18,6 @@ Public Sub ExtractMyPageFromSelectedMails()
     Dim xlWb As Object
     Dim xlSh As Object
     Dim nextRow As Long
-    Dim lastRow As Long
     
     Dim sel As Selection
     Dim itm As Object
@@ -31,21 +27,17 @@ Public Sub ExtractMyPageFromSelectedMails()
     Dim mypageUrl As String
     Dim loginId As String
     Dim passwordText As String
-    
+
     Dim seenIds As Object          ' 重複ID防止（1回の実行内）
-    Dim existingCompanies As Object ' スプレッドシート内の企業名重複防止
-    Dim ns As Outlook.NameSpace
 Dim inbox As Outlook.Folder
 Dim destFolder As Outlook.Folder
 Dim copiedMail As MailItem
 Dim firstMail As MailItem
     Dim currStore As Outlook.Store
     Dim companyName As String
-    Dim rowIdx As Long
 
     ' 重複ID管理用ディクショナリ
     Set seenIds = CreateObject("Scripting.Dictionary")
-    Set existingCompanies = CreateObject("Scripting.Dictionary")
 
 ' 選択メールチェック
 Set sel = Application.ActiveExplorer.Selection
@@ -81,46 +73,22 @@ If destFolder Is Nothing Then
 End If
 
     
-    If Left$(DEST_BOOK_LOCATION, 4) <> "http" Then
-        If Dir(DEST_BOOK_LOCATION) = "" Then
-            MsgBox "スプレッドシートのパス(DEST_BOOK_LOCATION)が正しく設定されていません。", vbExclamation
-            Exit Sub
-        End If
-    End If
-
-    ' Excel起動
+    ' Excel起動（新規ブックに出力）
     Set xlApp = CreateObject("Excel.Application")
     xlApp.Visible = True
-    Set xlWb = xlApp.Workbooks.Open(DEST_BOOK_LOCATION)
+    Set xlWb = xlApp.Workbooks.Add
+    Set xlSh = xlWb.Worksheets(1)
+    xlSh.Name = "マイページ一覧"
 
-    On Error Resume Next
-    Set xlSh = xlWb.Worksheets(DEST_SHEET_NAME)
-    On Error GoTo 0
+    ' 見出し行
+    xlSh.Cells(1, COL_COMPANY).Value = "企業名"
+    xlSh.Cells(1, COL_RECEIVED).Value = "受信日時"
+    xlSh.Cells(1, COL_SUBJECT).Value = "件名"
+    xlSh.Cells(1, COL_URL).Value = "URL"
+    xlSh.Cells(1, COL_ID).Value = "ID"
+    xlSh.Cells(1, COL_PASSWORD).Value = "パスワード"
 
-    If xlSh Is Nothing Then
-        MsgBox "シート名(DEST_SHEET_NAME)が見つかりません。", vbExclamation
-        xlWb.Close False
-        xlApp.Quit
-        Exit Sub
-    End If
-
-    ' 既存の企業名を辞書に読み込む（A列）
-    lastRow = xlSh.Cells(xlSh.Rows.Count, COL_COMPANY).End(-4162).Row 'xlUp
-    For rowIdx = 1 To lastRow
-        companyName = Trim$(CStr(xlSh.Cells(rowIdx, COL_COMPANY).Value))
-        If companyName <> "" Then
-            companyName = CleanSenderName(companyName)
-            If Not existingCompanies.Exists(companyName) Then
-                existingCompanies.Add companyName, True
-            End If
-        End If
-    Next rowIdx
-
-    If lastRow = 1 And Trim$(CStr(xlSh.Cells(1, COL_COMPANY).Value)) = "" Then
-        nextRow = 1
-    Else
-        nextRow = lastRow + 1
-    End If
+    nextRow = 2
     
     ' 選択メールを1通ずつ処理
     For Each itm In sel
@@ -143,13 +111,11 @@ End If
                 ' 同じIDは1回の実行内で一度だけ
                 companyName = CleanSenderName(mail.SenderName)
 
-                If Not seenIds.Exists(loginId) And Not existingCompanies.Exists(companyName) Then
+                If Not seenIds.Exists(loginId) Then
                     seenIds.Add loginId, True
-                    existingCompanies.Add companyName, True
-
-                    xlSh.Cells(nextRow, 1).Value = mail.ReceivedTime
                     xlSh.Cells(nextRow, COL_COMPANY).Value = companyName
-                    xlSh.Cells(nextRow, 3).Value = mail.Subject
+                    xlSh.Cells(nextRow, COL_RECEIVED).Value = mail.ReceivedTime
+                    xlSh.Cells(nextRow, COL_SUBJECT).Value = mail.Subject
                     xlSh.Cells(nextRow, COL_URL).Value = mypageUrl
                     xlSh.Cells(nextRow, COL_ID).Value = loginId
                     xlSh.Cells(nextRow, COL_PASSWORD).Value = passwordText
@@ -165,7 +131,6 @@ End If
         End If
     Next itm
 
-    xlWb.Save
     MsgBox "抽出とメールコピーが完了しました。", vbInformation
 
 End Sub
