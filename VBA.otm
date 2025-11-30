@@ -6,9 +6,10 @@ Public Sub ExtractMyPageFromSelectedMails()
 
     Const TARGET_FOLDER_NAME As String = "就活マイページ抽出"
 
-    ' ▼ここに追記先スプレッドシートのパスとシート名を設定してください▼
-    ' 例: "C:\Users\you\Google Drive\マイページ\mypage_list.xlsx"
-    Const DEST_BOOK_PATH As String = "C:\Users\you\Documents\mypage_sheet.xlsx"
+    ' ▼ここに追記先スプレッドシートのパス（またはURL）とシート名を設定してください▼
+    ' 例: "C:\Users\you\Google Drive\マイページ\mypage_list.xlsx" または
+    '     "https://example.sharepoint.com/:x:/r/sites/your/Shared%20Documents/mypage_list.xlsx"
+    Const DEST_BOOK_LOCATION As String = "https://example.sharepoint.com/:x:/r/sites/your/Shared%20Documents/mypage_sheet.xlsx"
     Const DEST_SHEET_NAME As String = "マイページ一覧"
     ' 固定の列対応: A=企業名, D=URL, E=ID, F=パスワード
     Const COL_COMPANY As Long = 1
@@ -80,15 +81,17 @@ If destFolder Is Nothing Then
 End If
 
     
-    If Dir(DEST_BOOK_PATH) = "" Then
-        MsgBox "スプレッドシートのパス(DEST_BOOK_PATH)が正しく設定されていません。", vbExclamation
-        Exit Sub
+    If Left$(DEST_BOOK_LOCATION, 4) <> "http" Then
+        If Dir(DEST_BOOK_LOCATION) = "" Then
+            MsgBox "スプレッドシートのパス(DEST_BOOK_LOCATION)が正しく設定されていません。", vbExclamation
+            Exit Sub
+        End If
     End If
 
     ' Excel起動
     Set xlApp = CreateObject("Excel.Application")
     xlApp.Visible = True
-    Set xlWb = xlApp.Workbooks.Open(DEST_BOOK_PATH)
+    Set xlWb = xlApp.Workbooks.Open(DEST_BOOK_LOCATION)
 
     On Error Resume Next
     Set xlSh = xlWb.Worksheets(DEST_SHEET_NAME)
