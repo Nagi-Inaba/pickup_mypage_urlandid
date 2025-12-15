@@ -1,10 +1,12 @@
 Option Explicit
 
 ' 選択中のメールからマイページURL・ログインID・パスワードを抽出し、
-' 新しいExcelブックに一覧出力＋該当メールを専用フォルダにコピーするマクロ
+' 指定したExcelブックに一覧を追記し、該当メールを専用フォルダにコピーするマクロ
 Public Sub ExtractMyPageFromSelectedMails()
 
     Const TARGET_FOLDER_NAME As String = "就活マイページ抽出"
+    Const SHEET_NAME As String = "マイページ一覧"
+    Const msoFileDialogFilePicker As Long = 3
 
     ' 固定の列対応: A=企業名, D=URL, E=ID, F=パスワード
     Const COL_COMPANY As Long = 1
@@ -18,77 +20,128 @@ Public Sub ExtractMyPageFromSelectedMails()
     Dim xlWb As Object
     Dim xlSh As Object
     Dim nextRow As Long
-    
+    Dim lastRow As Long
+
     Dim sel As Selection
     Dim itm As Object
     Dim mail As MailItem
-    
+
     Dim bodyText As String
     Dim mypageUrl As String
     Dim loginId As String
     Dim passwordText As String
 
     Dim seenIds As Object          ' 重複ID防止（1回の実行内）
-Dim inbox As Outlook.Folder
-Dim destFolder As Outlook.Folder
-Dim copiedMail As MailItem
-Dim firstMail As MailItem
+    Dim existingIds As Object      ' Excel側の既存ID
+    Dim inbox As Outlook.Folder
+    Dim destFolder As Outlook.Folder
+    Dim copiedMail As MailItem
+    Dim firstMail As MailItem
     Dim currStore As Outlook.Store
     Dim companyName As String
+    Dim i As Long
+    Dim fd As Object
+    Dim filePath As String
 
     ' 重複ID管理用ディクショナリ
     Set seenIds = CreateObject("Scripting.Dictionary")
+    Set existingIds = CreateObject("Scripting.Dictionary")
 
-' 選択メールチェック
-Set sel = Application.ActiveExplorer.Selection
-If sel Is Nothing Or sel.Count = 0 Then
-    MsgBox "メールが選択されていません。", vbExclamation
-    Exit Sub
-End If
-
-' 選択されている中で最初の MailItem を取得
-For Each itm In sel
-    If TypeOf itm Is MailItem Then
-        Set firstMail = itm
-        Exit For
+    ' 選択メールチェック
+    Set sel = Application.ActiveExplorer.Selection
+    If sel Is Nothing Or sel.Count = 0 Then
+        MsgBox "メールが選択されていません。", vbExclamation
+        Exit Sub
     End If
-Next
 
-If firstMail Is Nothing Then
-    MsgBox "メールアイテムが選択されていません。", vbExclamation
-    Exit Sub
-End If
+    ' 選択されている中で最初の MailItem を取得
+    For Each itm In sel
+        If TypeOf itm Is MailItem Then
+            Set firstMail = itm
+            Exit For
+        End If
+    Next
 
-' このメールが属しているアカウントのストアから受信トレイを取得
-Set currStore = firstMail.Parent.Store
-Set inbox = currStore.GetDefaultFolder(olFolderInbox)
+    If firstMail Is Nothing Then
+        MsgBox "メールアイテムが選択されていません。", vbExclamation
+        Exit Sub
+    End If
 
-' コピー先フォルダ準備（このアカウントの受信トレイ直下に作る）
-On Error Resume Next
-Set destFolder = inbox.Folders(TARGET_FOLDER_NAME)
-On Error GoTo 0
+    ' このメールが属しているアカウントのストアから受信トレイを取得
+    Set currStore = firstMail.Parent.Store
+    Set inbox = currStore.GetDefaultFolder(olFolderInbox)
 
-If destFolder Is Nothing Then
-    Set destFolder = inbox.Folders.Add(TARGET_FOLDER_NAME)
-End If
+    ' コピー先フォルダ準備（このアカウントの受信トレイ直下に作る）
+    On Error Resume Next
+    Set destFolder = inbox.Folders(TARGET_FOLDER_NAME)
+    On Error GoTo 0
 
-    
-    ' Excel起動（新規ブックに出力）
+    If destFolder Is Nothing Then
+        Set destFolder = inbox.Folders.Add(TARGET_FOLDER_NAME)
+    End If
+
+    ' 追記先のExcelファイルをユーザーに選ばせる
+    Set fd = Application.FileDialog(msoFileDialogFilePicker)
+    With fd
+        .Title = "追記するExcelファイルを選択してください"
+        .AllowMultiSelect = False
+        .Filters.Clear
+        .Filters.Add "Excel ファイル", "*.xlsx;*.xlsm;*.xls"
+
+        If .Show <> -1 Then
+            MsgBox "Excelファイルが選択されませんでした。処理を中止します。", vbExclamation
+            Exit Sub
+        End If
+
+        filePath = .SelectedItems(1)
+    End With
+
+    ' Excel起動（指定ブックに追記）
     Set xlApp = CreateObject("Excel.Application")
     xlApp.Visible = True
-    Set xlWb = xlApp.Workbooks.Add
-    Set xlSh = xlWb.Worksheets(1)
-    xlSh.Name = "マイページ一覧"
 
-    ' 見出し行
-    xlSh.Cells(1, COL_COMPANY).Value = "企業名"
-    xlSh.Cells(1, COL_RECEIVED).Value = "受信日時"
-    xlSh.Cells(1, COL_SUBJECT).Value = "件名"
-    xlSh.Cells(1, COL_URL).Value = "URL"
-    xlSh.Cells(1, COL_ID).Value = "ID"
-    xlSh.Cells(1, COL_PASSWORD).Value = "パスワード"
+    On Error Resume Next
+    Set xlWb = xlApp.Workbooks.Open(filePath)
+    On Error GoTo 0
 
-    nextRow = 2
+    If xlWb Is Nothing Then
+        MsgBox "選択したExcelファイルを開けませんでした。処理を中止します。", vbExclamation
+        xlApp.Quit
+        Exit Sub
+    End If
+
+    On Error Resume Next
+    Set xlSh = xlWb.Worksheets(SHEET_NAME)
+    On Error GoTo 0
+
+    If xlSh Is Nothing Then
+        Set xlSh = xlWb.Worksheets.Add
+        xlSh.Name = SHEET_NAME
+    End If
+
+    ' 見出し行（未設定の場合のみセット）
+    If xlSh.Cells(1, COL_COMPANY).Value = "" Then
+        xlSh.Cells(1, COL_COMPANY).Value = "企業名"
+        xlSh.Cells(1, COL_RECEIVED).Value = "受信日時"
+        xlSh.Cells(1, COL_SUBJECT).Value = "件名"
+        xlSh.Cells(1, COL_URL).Value = "URL"
+        xlSh.Cells(1, COL_ID).Value = "ID"
+        xlSh.Cells(1, COL_PASSWORD).Value = "パスワード"
+    End If
+
+    ' 既存IDを読み込んで重複を避ける
+    lastRow = xlSh.Cells(xlSh.Rows.Count, COL_ID).End(-4162).Row ' xlUp
+    If lastRow < 2 Then lastRow = 1
+
+    For i = 2 To lastRow
+        loginId = Trim$(CStr(xlSh.Cells(i, COL_ID).Value))
+        If loginId <> "" Then
+            If Not existingIds.Exists(loginId) Then existingIds.Add loginId, True
+        End If
+    Next i
+
+    nextRow = xlSh.Cells(xlSh.Rows.Count, COL_COMPANY).End(-4162).Row + 1 ' xlUp
+    If nextRow < 2 Then nextRow = 2
     
     ' 選択メールを1通ずつ処理
     For Each itm In sel
@@ -108,11 +161,13 @@ End If
             ' URLとIDの両方があるものだけ記録（お知らせメールなどは除外）
             If mypageUrl <> "" And loginId <> "" Then
 
-                ' 同じIDは1回の実行内で一度だけ
+                ' 同じIDはExcel上でも本実行内でも一度だけ
                 companyName = CleanSenderName(mail.SenderName)
 
-                If Not seenIds.Exists(loginId) Then
+                If Not existingIds.Exists(loginId) And Not seenIds.Exists(loginId) Then
                     seenIds.Add loginId, True
+                    existingIds.Add loginId, True
+
                     xlSh.Cells(nextRow, COL_COMPANY).Value = companyName
                     xlSh.Cells(nextRow, COL_RECEIVED).Value = mail.ReceivedTime
                     xlSh.Cells(nextRow, COL_SUBJECT).Value = mail.Subject
@@ -130,6 +185,8 @@ End If
             End If
         End If
     Next itm
+
+    xlWb.Save
 
     MsgBox "抽出とメールコピーが完了しました。", vbInformation
 
