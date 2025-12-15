@@ -40,8 +40,7 @@ Public Sub ExtractMyPageFromSelectedMails()
     Dim currStore As Outlook.Store
     Dim companyName As String
     Dim i As Long
-    Dim fd As Object
-    Dim filePath As String
+    Dim filePath As Variant
 
     ' 重複ID管理用ディクショナリ
     Set seenIds = CreateObject("Scripting.Dictionary")
@@ -80,25 +79,21 @@ Public Sub ExtractMyPageFromSelectedMails()
         Set destFolder = inbox.Folders.Add(TARGET_FOLDER_NAME)
     End If
 
-    ' 追記先のExcelファイルをユーザーに選ばせる
-    Set fd = Application.FileDialog(msoFileDialogFilePicker)
-    With fd
-        .Title = "追記するExcelファイルを選択してください"
-        .AllowMultiSelect = False
-        .Filters.Clear
-        .Filters.Add "Excel ファイル", "*.xlsx;*.xlsm;*.xls"
-
-        If .Show <> -1 Then
-            MsgBox "Excelファイルが選択されませんでした。処理を中止します。", vbExclamation
-            Exit Sub
-        End If
-
-        filePath = .SelectedItems(1)
-    End With
-
     ' Excel起動（指定ブックに追記）
     Set xlApp = CreateObject("Excel.Application")
     xlApp.Visible = True
+
+    ' 追記先のExcelファイルをユーザーに選ばせる（OutlookではFileDialogが使えないためExcelのダイアログを利用）
+    filePath = xlApp.GetOpenFilename(_
+        FileFilter:="Excel ファイル (*.xlsx;*.xlsm;*.xls),*.xlsx;*.xlsm;*.xls", _
+        Title:="追記するExcelファイルを選択してください")
+
+    If VarType(filePath) = vbBoolean And filePath = False Then
+        MsgBox "Excelファイルが選択されませんでした。処理を中止します。", vbExclamation
+        xlApp.Quit
+        Set xlApp = Nothing
+        Exit Sub
+    End If
 
     On Error Resume Next
     Set xlWb = xlApp.Workbooks.Open(filePath)
