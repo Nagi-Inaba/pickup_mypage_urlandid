@@ -84,7 +84,7 @@ Public Sub ExtractMyPageFromSelectedMails()
     xlApp.Visible = True
 
     ' 追記先のExcelファイルをユーザーに選ばせる（OutlookではFileDialogが使えないためExcelのダイアログを利用）
-    filePath = xlApp.GetOpenFilename(_
+    filePath = xlApp.GetOpenFilename( _
         FileFilter:="Excel ファイル (*.xlsx;*.xlsm;*.xls),*.xlsx;*.xlsm;*.xls", _
         Title:="追記するExcelファイルを選択してください")
 
